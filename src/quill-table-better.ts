@@ -20,8 +20,8 @@ import {
   TableColgroup
 } from './formats/table';
 import TableHeader from './formats/header';
-import { ListContainer } from './formats/list';
-import { 
+import TableList, { ListContainer } from './formats/list';
+import {
   matchTable,
   matchTableCell,
   matchTableCol,
@@ -60,10 +60,17 @@ class Table extends Module {
   tableMenus: TableMenus;
   tableSelect: TableSelect;
   options: Options;
-  
+
+  private abortController = new AbortController();
+
+  private static formatsRegistered = false;
   static keyboardBindings: { [propName: string]: BindingObject };
 
   static register() {
+    if (Table.formatsRegistered) {
+      return;
+    }
+
     Quill.register(TableCellBlock, true);
     Quill.register(TableThBlock, true);
     Quill.register(TableCell, true);
@@ -78,12 +85,17 @@ class Table extends Module {
     Quill.register(TableColgroup, true);
     Quill.register({
       'modules/toolbar': TableToolbar,
-      'modules/clipboard': TableClipboard
+      'modules/clipboard': TableClipboard,
+      'formats/table-list': TableList,
+      'formats/table-header': TableHeader
     }, true);
+
+    Table.formatsRegistered = true;
   }
-  
+
   constructor(quill: Quill, options: Options) {
     super(quill, options);
+
     quill.clipboard.addMatcher('td, th', matchTableCell);
     quill.clipboard.addMatcher('tr', matchTable);
     quill.clipboard.addMatcher('col', matchTableCol);
@@ -93,18 +105,41 @@ class Table extends Module {
     this.operateLine = new OperateLine(quill, this);
     this.tableMenus = new TableMenus(quill, this);
     this.tableSelect = new TableSelect();
-    quill.root.addEventListener('keyup', this.handleKeyup.bind(this));
-    quill.root.addEventListener('mousedown', this.handleMousedown.bind(this));
-    quill.root.addEventListener('scroll', this.handleScroll.bind(this));
+    quill.root.addEventListener('keyup', this.handleKeyup.bind(this), { signal: this.abortController.signal });
+    quill.root.addEventListener('mousedown', this.handleMousedown.bind(this), { signal: this.abortController.signal });
+    quill.root.addEventListener('scroll', this.handleScroll.bind(this), { signal: this.abortController.signal });
     this.listenDeleteTable();
     this.registerToolbarTable(options?.toolbarTable);
+
+    const onDocumentClick = (event: MouseEvent): void => {
+      const path = event.composedPath();
+      const pathIncludesQuillContainer = path.includes(this.quill.container);
+      const toolbar: TableToolbar | null | undefined = this.quill.getModule('toolbar') as TableToolbar | null | undefined;
+      const pathIncludesToolbar = toolbar?.container ? path.includes(toolbar.container) : false;
+
+      if (!pathIncludesQuillContainer && !pathIncludesToolbar) {
+        this.hideTools();
+        this.tableSelect.hide(this.tableSelect.root);
+      }
+    }
+
+    window.addEventListener('mousedown', onDocumentClick, { signal: this.abortController.signal });
+  }
+
+  /**
+   * Destroy the module and clean up resources
+   * This should be called when the Quill instance is being destroyed
+   */
+  destroy(): void {
+    this.cellSelection.cleanupEventListeners();
+    this.abortController.abort();
   }
 
   clearHistorySelected() {
     const [table] = this.getTable();
     if (!table) return;
     const selectedTds: Element[] = Array.from(
-      table.domNode.querySelectorAll('td.ql-cell-focused, td.ql-cell-selected')
+        table.domNode.querySelectorAll('td.ql-cell-focused, td.ql-cell-selected')
     );
     for (const td of selectedTds) {
       td.classList && td.classList.remove('ql-cell-focused', 'ql-cell-selected');
@@ -131,7 +166,7 @@ class Table extends Module {
   }
 
   getTable(
-    range = this.quill.getSelection()
+      range = this.quill.getSelection()
   ): [null, null, null, -1] | [TableContainer, TableRow, TableCell, number] {
     if (range == null) return [null, null, null, -1];
     const [block, offset] = this.quill.getLine(range.index);
@@ -192,17 +227,17 @@ class Table extends Module {
         const minIndex = Math.min(range.index, index);
         const maxIndex = Math.max(range.index + range.length, index + length);
         this.quill.setSelection(
-          minIndex,
-          maxIndex - minIndex,
-          Quill.sources.USER
+            minIndex,
+            maxIndex - minIndex,
+            Quill.sources.USER
         );
       }
       this.quill.root.removeEventListener('mousemove', handleMouseMove);
       this.quill.root.removeEventListener('mouseup', handleMouseup);
     }
 
-    this.quill.root.addEventListener('mousemove', handleMouseMove);
-    this.quill.root.addEventListener('mouseup', handleMouseup);
+    this.quill.root.addEventListener('mousemove', handleMouseMove, { signal: this.abortController.signal });
+    this.quill.root.addEventListener('mouseup', handleMouseup, { signal: this.abortController.signal });
   }
 
   handleScroll() {
@@ -232,10 +267,10 @@ class Table extends Module {
     const _offset = isExtra ? 2 : 1;
     const extraDelta = isExtra ? new Delta().insert('\n') : new Delta();
     const base = new Delta()
-      .retain(range.index)
-      .delete(range.length)
-      .concat(extraDelta)
-      .insert('\n', { [TableTemporary.blotName]: { style } });
+        .retain(range.index)
+        .delete(range.length)
+        .concat(extraDelta)
+        .insert('\n', { [TableTemporary.blotName]: { style } });
     const delta = new Array(rows).fill(0).reduce(memo => {
       const id = tableId();
       return new Array(columns).fill('\n').reduce((memo, text) => {
@@ -285,16 +320,11 @@ class Table extends Module {
     const button = toolbar.container.querySelector('button.ql-table-better');
     if (!button || !this.tableSelect.root) return;
     button.appendChild(this.tableSelect.root);
-    button.addEventListener('click', (e: MouseEvent) => {
-      this.tableSelect.handleClick(e, this.insertTable.bind(this));
-    });
-    document.addEventListener('click', (e: MouseEvent) => {
-      const visible = e.composedPath().includes(button);
-      if (visible) return;
-      if (!this.tableSelect.root.classList.contains('ql-hidden')) {
-        this.tableSelect.hide(this.tableSelect.root);
-      }
-    });
+    button.addEventListener(
+        'click',
+        (e: MouseEvent) => this.tableSelect.handleClick(e, this.insertTable.bind(this)),
+        { signal: this.abortController.signal },
+    );
   }
 
   showTools(force?: boolean) {
@@ -310,8 +340,8 @@ class Table extends Module {
   private updateMenus(e: KeyboardEvent) {
     if (!this.cellSelection.selectedTds.length) return;
     if (
-      e.key === 'Enter' ||
-      (e.ctrlKey && e.key === 'v')
+        e.key === 'Enter' ||
+        (e.ctrlKey && e.key === 'v')
     ) {
       this.tableMenus.updateMenus();
     }
@@ -333,10 +363,10 @@ const keyboardBindings = {
     handler(range: Range, context: Context) {
       const [line, offset] = this.quill.getLine(range.index);
       const delta = new Delta()
-        .retain(range.index)
-        .insert('\n', context.format)
-        .retain(line.length() - offset - 1)
-        .retain(1, { header: null });
+          .retain(range.index)
+          .insert('\n', context.format)
+          .retain(line.length() - offset - 1)
+          .retain(1, { header: null });
       this.quill.updateContents(delta, Quill.sources.USER);
       this.quill.setSelection(range.index + 1, Quill.sources.SILENT);
       this.quill.scrollSelectionIntoView();
@@ -371,12 +401,12 @@ function makeCellBlockHandler(key: string) {
       if (offset === 0 && !line.prev) return false;
       const blotName = line.prev?.statics.blotName;
       if (
-        offset === 0 &&
-        (
-          blotName === ListContainer.blotName ||
-          blotName === TableCellBlock.blotName ||
-          blotName === TableHeader.blotName
-        )
+          offset === 0 &&
+          (
+              blotName === ListContainer.blotName ||
+              blotName === TableCellBlock.blotName ||
+              blotName === TableHeader.blotName
+          )
       ) {
         return removeLine.call(this, line, range);
       }
@@ -429,7 +459,7 @@ function makeTableListHandler(key: string) {
     handler(range: Range, context: Context) {
       const [line] = this.quill.getLine(range.index);
       const cellId = getCellId(line.parent.formats()[line.parent.statics.blotName]);
-      line.replaceWith(TableCellBlock.blotName, cellId);      
+      line.replaceWith(TableCellBlock.blotName, cellId);
     }
   }
 }

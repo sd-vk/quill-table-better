@@ -57,6 +57,8 @@ class CellSelection {
   disabledList: Array<HTMLElement | Element>;
   singleList: Array<HTMLElement | Element>;
   tableBetter: QuillTableBetter;
+
+  private abortController = new AbortController();
   constructor(quill: Quill, tableBetter: QuillTableBetter) {
     this.quill = quill;
     this.selectedTds = [];
@@ -65,9 +67,15 @@ class CellSelection {
     this.disabledList = [];
     this.singleList = [];
     this.tableBetter = tableBetter;
-    this.quill.root.addEventListener('click', this.handleClick.bind(this));
-    this.initDocumentListener();
+    this.quill.root.addEventListener('click', this.handleClick.bind(this), { signal: this.abortController.signal });
     this.initWhiteList();
+
+    CellSelectionRegistry.registerNewInstance(this);
+  }
+
+  cleanupEventListeners() {
+    this.abortController.abort();
+    CellSelectionRegistry.unregisterInstance(this);
   }
 
   attach(input: HTMLElement) {
@@ -97,7 +105,10 @@ class CellSelection {
 
   exitTableFocus(block: TableCellChildren, up: boolean) {
     const cell = getCorrectCellBlot(block);
-    if(!cell) return;
+    if(!cell) {
+      return;
+    }
+
     const table = cell.table();
     const offset = up ? -1 : table.length();
     const index = table.offset(this.quill.scroll) + offset;
@@ -148,7 +159,7 @@ class CellSelection {
       }
       res = `<tr>${res}</tr>`;
       html += res;
-    } 
+    }
     html = `<table><tbody>${html}</tbody></table>`;
     html = tableBlot.getCopyTable(html);
     const text = this.getText(html);
@@ -195,9 +206,9 @@ class CellSelection {
   }
 
   getListCorrectValue(
-    format: string,
-    value: boolean | string,
-    formats: AttributeMap = {}
+      format: string,
+      value: boolean | string,
+      formats: AttributeMap = {}
   ) {
     if (format !== 'list') return value;
     if (value === 'check') {
@@ -293,9 +304,9 @@ class CellSelection {
   getText(html: string): string {
     const delta: Delta = this.quill.clipboard.convert({ html });
     return delta
-      .filter((op) => typeof op.insert === 'string')
-      .map((op) => op.insert)
-      .join('');
+        .filter((op) => typeof op.insert === 'string')
+        .map((op) => op.insert)
+        .join('');
   }
 
   handleClick(e: MouseEvent) {
@@ -347,7 +358,7 @@ class CellSelection {
     startTd.classList.add('ql-cell-focused');
     this.setHeaderRowSwitch();
     this.setMenuDisable('merge');
-    
+
     const handleMouseMove = (e: MouseEvent) => {
       const endTd = (e.target as Element).closest('td,th');
       if (!endTd) return;
@@ -375,8 +386,8 @@ class CellSelection {
       this.quill.root.removeEventListener('mouseup', handleMouseup);
     }
 
-    this.quill.root.addEventListener('mousemove', handleMouseMove);
-    this.quill.root.addEventListener('mouseup', handleMouseup);
+    this.quill.root.addEventListener('mousemove', handleMouseMove, { signal: this.abortController.signal });
+    this.quill.root.addEventListener('mouseup', handleMouseup, { signal: this.abortController.signal });
   }
 
   hasTdTh(selectedTds: Element[]) {
@@ -385,21 +396,14 @@ class CellSelection {
     return { hasTd, hasTh };
   }
 
-  initDocumentListener() {
-    document.addEventListener('copy', (e: ClipboardEvent) => this.onCaptureCopy(e, false));
-    document.addEventListener('cut', (e: ClipboardEvent) => this.onCaptureCopy(e, true));
-    document.addEventListener('keyup', this.handleDeleteKeyup.bind(this));
-    document.addEventListener('paste', this.onCapturePaste.bind(this));
-  }
-
   initWhiteList() {
     const toolbar = this.quill.getModule('toolbar');
     // @ts-expect-error
     Array.from(toolbar.container.querySelectorAll('button, select')).forEach(
-      input => {
-        // @ts-ignore
-        this.attach(input);
-      }
+        input => {
+          // @ts-ignore
+          this.attach(input);
+        }
     );
   }
 
@@ -428,12 +432,12 @@ class CellSelection {
 
   isContinue(op: Op) {
     if (
-      this.insertWith(op.insert) &&
-      (
-        !op.attributes ||
-        op.attributes['table-list'] ||
-        op.attributes['table-header']
-      )
+        this.insertWith(op.insert) &&
+        (
+            !op.attributes ||
+            op.attributes['table-list'] ||
+            op.attributes['table-header']
+        )
     ) {
       return true;
     }
@@ -477,8 +481,8 @@ class CellSelection {
     const _key = up ? 'prev' : 'next';
     if (block[_key] && this.selectedTds.length) {
       const index =
-        block[_key].offset(this.quill.scroll) +
-        Math.min(offset, block[_key].length() - 1);
+          block[_key].offset(this.quill.scroll) +
+          Math.min(offset, block[_key].length() - 1);
       this.quill.setSelection(index, 0, Quill.sources.USER);
     } else {
       if (!this.selectedTds.length) {
@@ -599,21 +603,29 @@ class CellSelection {
     Object.assign(copyFormats, { 'data-row': id });
     const cell = Quill.find(selectedTd) as TableCell;
     const _cell = cell.replaceWith(cell.statics.blotName, copyFormats) as TableCell;
+
     this.quill.setSelection(
-      _cell.offset(this.quill.scroll) + _cell.length() - 1,
-      0,
-      Quill.sources.USER
+        _cell.offset(this.quill.scroll) + _cell.length() - 1,
+        0,
+        Quill.sources.USER
     );
-    const range = this.quill.getSelection(true);
-    const formats = this.quill.getFormat(range.index) as Props;
+
     const html = copyTd.innerHTML;
     const text = this.getText(html);
     const pastedDelta = this.quill.clipboard.convert({ text, html });
-    const delta = new Delta()
-      .retain(range.index)
-      .delete(range.length)
-      .concat(applyFormat(pastedDelta, formats));
-    this.quill.updateContents(delta, Quill.sources.USER);
+
+    const range = this.quill.getSelection(true);
+    if (range) {
+      const formats = this.quill.getFormat(range.index) as Props;
+      const delta = new Delta()
+          .retain(range.index)
+          .delete(range.length)
+          .concat(applyFormat(pastedDelta, formats));
+      this.quill.updateContents(delta, Quill.sources.USER);
+    } else {
+      this.quill.updateContents(pastedDelta, Quill.sources.USER);
+    }
+
     return _cell;
   }
 
@@ -656,14 +668,14 @@ class CellSelection {
       const prevBounds = prev.getBoundingClientRect();
       const nextBounds = next.getBoundingClientRect();
       if (
-        (
-          prevBounds.top <= nextBounds.top ||
-          prevBounds.bottom <= nextBounds.bottom
-        ) &&
-        (
-          prevBounds.left <= nextBounds.left ||
-          prevBounds.right <= nextBounds.right
-        )
+          (
+              prevBounds.top <= nextBounds.top ||
+              prevBounds.bottom <= nextBounds.bottom
+          ) &&
+          (
+              prevBounds.left <= nextBounds.left ||
+              prevBounds.right <= nextBounds.right
+          )
       ) {
         return -1
       }
@@ -707,9 +719,9 @@ class CellSelection {
     this.selectedTds = [target];
     target.classList.add('ql-cell-focused');
     force && this.quill.setSelection(
-      cell.offset(this.quill.scroll) + cell.length() - 1,
-      0,
-      Quill.sources.USER
+        cell.offset(this.quill.scroll) + cell.length() - 1,
+        0,
+        Quill.sources.USER
     );
   }
 
@@ -766,40 +778,121 @@ class CellSelection {
   updateSelected(type: string) {
     switch (type) {
       case 'column':
-        {
-          const target =
+      {
+        const target =
             this.endTd.nextElementSibling ||
             this.startTd.previousElementSibling;
-          if (!target) return this.tableBetter.hideTools();;
-          this.setSelected(target);
-        }
+        if (!target) return this.tableBetter.hideTools();
+        this.setSelected(target);
+      }
         break;
       case 'row':
-        {
-          const row =
+      {
+        const row =
             this.getCorrectRow(this.endTd, 'next') ||
             this.getCorrectRow(this.startTd, 'prev');
-          if (!row) return this.tableBetter.hideTools();
-          const startCorrectBounds = getCorrectBounds(this.startTd, this.quill.container);
-          let child = row.firstElementChild;
-          while (child) {
-            const childCorrectBounds = getCorrectBounds(child, this.quill.container);
-            if (
+        if (!row) return this.tableBetter.hideTools();
+        const startCorrectBounds = getCorrectBounds(this.startTd, this.quill.container);
+        let child = row.firstElementChild;
+        while (child) {
+          const childCorrectBounds = getCorrectBounds(child, this.quill.container);
+          if (
               childCorrectBounds.left + DEVIATION >= startCorrectBounds.left ||
               childCorrectBounds.right - DEVIATION >= startCorrectBounds.left
-            ) {
-              this.setSelected(child);
-              return;
-            }
-            child = child.nextElementSibling;
+          ) {
+            this.setSelected(child);
+            return;
           }
-          this.setSelected(row.firstElementChild);
+          child = child.nextElementSibling;
         }
+        this.setSelected(row.firstElementChild);
+      }
         break;
       default:
         break;
     }
   }
 }
+
+// Static registry to track all active table instances
+class CellSelectionRegistry {
+  private static instances: Set<CellSelection> = new Set();
+  private static globalListenersAttached = false;
+
+  static registerNewInstance(instance: CellSelection): void {
+    this.instances.add(instance);
+
+    if (!this.globalListenersAttached) {
+      this.attachGlobalListeners();
+      this.globalListenersAttached = true;
+    }
+  }
+
+  static unregisterInstance(instance: CellSelection): void {
+    this.instances.delete(instance);
+
+    if (this.instances.size === 0 && this.globalListenersAttached) {
+      this.detachGlobalListeners();
+      this.globalListenersAttached = false;
+    }
+  }
+
+  static getActiveInstance(): CellSelection | null {
+    // Find the instance whose quill currently has focus or has selected cells
+    for (const instance of this.instances) {
+      if (instance.selectedTds.length > 0 || instance.quill.hasFocus()) {
+        return instance;
+      }
+    }
+    return null;
+  }
+
+  private static globalCopyHandler = (event: ClipboardEvent): void => {
+    const activeInstance = this.getActiveInstance();
+
+    if (activeInstance) {
+      activeInstance.onCaptureCopy(event, false);
+    }
+  };
+
+  private static globalCutHandler = (event: ClipboardEvent): void => {
+    const activeInstance = this.getActiveInstance();
+
+    if (activeInstance) {
+      activeInstance.onCaptureCopy(event, true);
+    }
+  };
+
+  private static globalKeyupHandler = (event: KeyboardEvent): void => {
+    const activeInstance = this.getActiveInstance();
+
+    if (activeInstance) {
+      activeInstance.handleDeleteKeyup(event);
+    }
+  };
+
+  private static globalPasteHandler = (event: ClipboardEvent): void => {
+    const activeInstance = this.getActiveInstance();
+
+    if (activeInstance) {
+      activeInstance.onCapturePaste(event);
+    }
+  };
+
+  private static attachGlobalListeners(): void {
+    document.addEventListener('copy', this.globalCopyHandler);
+    document.addEventListener('cut', this.globalCutHandler);
+    document.addEventListener('keyup', this.globalKeyupHandler);
+    document.addEventListener('paste', this.globalPasteHandler);
+  }
+
+  private static detachGlobalListeners(): void {
+    document.removeEventListener('copy', this.globalCopyHandler);
+    document.removeEventListener('cut', this.globalCutHandler);
+    document.removeEventListener('keyup', this.globalKeyupHandler);
+    document.removeEventListener('paste', this.globalPasteHandler);
+  }
+}
+
 
 export default CellSelection;
