@@ -84,8 +84,9 @@ class Table extends Module {
     Quill.register(TableCol, true);
     Quill.register(TableColgroup, true);
     Quill.register({
-      'modules/toolbar': TableToolbar,
       'modules/clipboard': TableClipboard,
+      'modules/toolbar': TableToolbar,
+      'formats/table-better': ToolbarTable,
       'formats/table-list': TableList,
       'formats/table-header': TableHeader
     }, true);
@@ -110,20 +111,6 @@ class Table extends Module {
     quill.root.addEventListener('scroll', this.handleScroll.bind(this), { signal: this.abortController.signal });
     this.listenDeleteTable();
     this.registerToolbarTable(options?.toolbarTable);
-
-    const onDocumentClick = (event: MouseEvent): void => {
-      const path = event.composedPath();
-      const pathIncludesQuillContainer = path.includes(this.quill.container);
-      const toolbar: TableToolbar | null | undefined = this.quill.getModule('toolbar') as TableToolbar | null | undefined;
-      const pathIncludesToolbar = toolbar?.container ? path.includes(toolbar.container) : false;
-
-      if (!pathIncludesQuillContainer && !pathIncludesToolbar) {
-        this.hideTools();
-        this.tableSelect.hide(this.tableSelect.root);
-      }
-    }
-
-    window.addEventListener('mousedown', onDocumentClick, { signal: this.abortController.signal });
   }
 
   /**
@@ -314,15 +301,34 @@ class Table extends Module {
   }
 
   private registerToolbarTable(toolbarTable: boolean) {
-    if (!toolbarTable) return;
-    Quill.register({ 'formats/table-better': ToolbarTable }, true);
+    if (!toolbarTable) {
+      return;
+    }
+
     const toolbar = this.quill.getModule('toolbar') as TableToolbar;
     const button = toolbar.container.querySelector('button.ql-table-better');
-    if (!button || !this.tableSelect.root) return;
+
+    if (!button || !this.tableSelect.root) {
+      return;
+    }
+
     button.appendChild(this.tableSelect.root);
+
     button.addEventListener(
         'click',
         (e: MouseEvent) => this.tableSelect.handleClick(e, this.insertTable.bind(this)),
+        { signal: this.abortController.signal },
+    );
+
+    document.addEventListener(
+        'click',
+        (e: MouseEvent) => {
+          const visible = e.composedPath().includes(button);
+          if (visible) return;
+          if (!this.tableSelect.root.classList.contains('ql-hidden')) {
+            this.tableSelect.hide(this.tableSelect.root);
+          }
+        },
         { signal: this.abortController.signal },
     );
   }

@@ -25,6 +25,7 @@ import {
   TableThRow
 } from '../formats/table';
 import { DEVIATION } from '../config';
+import TableToolbar from "../modules/toolbar";
 
 const WHITE_LIST = [
   'bold',
@@ -812,10 +813,29 @@ class CellSelection {
         break;
     }
   }
+
+  onDocumentClick(event: MouseEvent): void {
+    const path = event.composedPath();
+    const pathIncludesQuillContainer = path.includes(this.quill.container);
+    const toolbar: TableToolbar | null | undefined = this.quill.getModule('toolbar') as TableToolbar | null | undefined;
+    const pathIncludesToolbar = toolbar?.container ? path.includes(toolbar.container) : false;
+
+    if (pathIncludesQuillContainer || pathIncludesToolbar) {
+      CellSelectionRegistry.activeInstance = this;
+      return;
+    }
+
+    this.tableBetter.hideTools();
+
+    if (this === CellSelectionRegistry.activeInstance) {
+      CellSelectionRegistry.activeInstance = null;
+    }
+  }
 }
 
 // Static registry to track all active table instances
 class CellSelectionRegistry {
+  static activeInstance: CellSelection | null = null;
   private static instances: Set<CellSelection> = new Set();
   private static globalListenersAttached = false;
 
@@ -837,45 +857,25 @@ class CellSelectionRegistry {
     }
   }
 
-  static getActiveInstance(): CellSelection | null {
-    // Find the instance whose quill currently has focus or has selected cells
-    for (const instance of this.instances) {
-      if (instance.selectedTds.length > 0 || instance.quill.hasFocus()) {
-        return instance;
-      }
-    }
-    return null;
-  }
-
   private static globalCopyHandler = (event: ClipboardEvent): void => {
-    const activeInstance = this.getActiveInstance();
-
-    if (activeInstance) {
-      activeInstance.onCaptureCopy(event, false);
-    }
+    this.activeInstance?.onCaptureCopy(event, false);
   };
 
   private static globalCutHandler = (event: ClipboardEvent): void => {
-    const activeInstance = this.getActiveInstance();
-
-    if (activeInstance) {
-      activeInstance.onCaptureCopy(event, true);
-    }
+    this.activeInstance?.onCaptureCopy(event, true);
   };
 
   private static globalKeyupHandler = (event: KeyboardEvent): void => {
-    const activeInstance = this.getActiveInstance();
-
-    if (activeInstance) {
-      activeInstance.handleDeleteKeyup(event);
-    }
+    this.activeInstance?.handleDeleteKeyup(event);
   };
 
   private static globalPasteHandler = (event: ClipboardEvent): void => {
-    const activeInstance = this.getActiveInstance();
+    this.activeInstance?.onCapturePaste(event);
+  };
 
-    if (activeInstance) {
-      activeInstance.onCapturePaste(event);
+  private static globalClickHandler = (event: MouseEvent): void => {
+    for (const instance of this.instances) {
+        instance.onDocumentClick(event);
     }
   };
 
@@ -884,6 +884,7 @@ class CellSelectionRegistry {
     document.addEventListener('cut', this.globalCutHandler);
     document.addEventListener('keyup', this.globalKeyupHandler);
     document.addEventListener('paste', this.globalPasteHandler);
+    document.addEventListener('mousedown', this.globalClickHandler);
   }
 
   private static detachGlobalListeners(): void {
@@ -891,6 +892,7 @@ class CellSelectionRegistry {
     document.removeEventListener('cut', this.globalCutHandler);
     document.removeEventListener('keyup', this.globalKeyupHandler);
     document.removeEventListener('paste', this.globalPasteHandler);
+    document.removeEventListener('mousedown', this.globalClickHandler);
   }
 }
 
