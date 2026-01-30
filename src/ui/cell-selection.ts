@@ -540,15 +540,24 @@ class CellSelection {
   }
 
   onCapturePaste(e: ClipboardEvent) {
-    if (!this.selectedTds?.length) return;
+    if (!this.selectedTds?.length) {
+      return;
+    }
+
     e.preventDefault();
     const html = e.clipboardData?.getData('text/html');
-    const text = e.clipboardData?.getData('text/plain');
     const container = document.createElement('div');
     container.innerHTML = html;
     const copyRows = Array.from(container.querySelectorAll('tr'));
-    if (!copyRows.length) return;
-    const cell = Quill.find(this.startTd) as TableCell;
+    if (!copyRows.length) {
+      return;
+    }
+
+    const cell = Quill.find(this.startTd) as TableCell | null;
+    if (!cell) {
+      return;
+    }
+
     const row = cell.row();
     const table = cell.table();
     this.quill.history.cutoff();
